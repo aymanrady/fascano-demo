@@ -3,9 +3,11 @@
 ## Setup
 - Setup `sail`
 - `vendor/bin/sail up -d`
+- `vendor/bin/sail composer install`
+- `vendor/bin/sail npm install`
 - migrate & seed
     ```shell
-    artisan migrate:fresh --seed
+    vendor/bin/sail artisan migrate:fresh --seed
     ```
 - `vendor/bin/sail npm run dev`
 - navigate to `localhost/partners`
