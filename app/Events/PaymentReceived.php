@@ -15,6 +15,6 @@ class PaymentReceived
      * Create a new event instance.
      */
     public function __construct(
-        public Payment $payment
+        public Payment $payment,
     ) {}
 }

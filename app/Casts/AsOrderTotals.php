@@ -14,12 +14,13 @@ class AsOrderTotals implements CastsAttributes
      *
      * @param  array<string, mixed>  $attributes
      */
-    public function get(Model $model, string $key, mixed $value, array $attributes): mixed
+    public function get(Model $model, string $key, mixed $value, array $attributes): OrderTotals
     {
         $totals = json_decode($value, true);
 
         return new OrderTotals(
-            total: Money::parse($totals['total']['amount'] ?? 0, $totals['total']['currency'] ?? null),
+            subtotal: Money::parse($totals['subtotal']['amount'] ?? 0, $totals['subtotal']['currency'] ?? null),
+            tip: Money::parse($totals['tip']['amount'] ?? 0, $totals['tip']['currency'] ?? null),
         );
     }
 

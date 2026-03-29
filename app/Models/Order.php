@@ -6,6 +6,8 @@ use App\Casts\AsOrderItems;
 use App\Casts\AsOrderTotals;
 use App\Enums\OrderStatus;
 use App\Models\Menu\Item;
+use App\ValueObject\OrderItem;
+use App\ValueObject\OrderItems;
 use App\ValueObject\OrderTotals;
 use Cknow\Money\Money;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
@@ -15,6 +17,7 @@ use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Collection;
 
 #[Fillable(['table_id', 'status'])]
 class Order extends Model
@@ -32,7 +35,7 @@ class Order extends Model
         }
 
         $this->items->addItem($item);
-        $this->totals = OrderTotals::fromItems($this->items);
+        $this->totals = $this->totals->withItems($this->items);
     }
 
     public function remove(Item $item): void
@@ -42,7 +45,16 @@ class Order extends Model
         }
 
         $this->items->removeItem($item);
-        $this->totals = OrderTotals::fromItems($this->items);
+        $this->totals = $this->totals->withItems($this->items);
+    }
+
+    public function addTip(Money $tip): void
+    {
+        if ($this->status !== OrderStatus::Pending) {
+            return;
+        }
+
+        $this->totals = $this->totals->withTip($tip);
     }
 
     public function needsPayment(): bool
@@ -97,6 +109,38 @@ class Order extends Model
                     Money::parse(0, $this->total->getCurrency())
                 )
         );
+    }
+
+    protected function unpaidItems(): Attribute
+    {
+        return Attribute::get(function() {
+            $paidItems = $this->payments()
+                ->successful()
+                ->get()
+                ->map(fn(Payment $payment) => $payment->items)
+                ->reduce(
+                    function (Collection $paidItems, Collection $paymentItems) {
+                        $paymentItems->each(
+                            fn(int $quantity, int $itemId) => $paidItems->put(
+                                $itemId, $paidItems->get($itemId, 0) + $quantity
+                            )
+                        );
+
+                        return $paidItems;
+                    },
+                    Collection::make()
+                );
+
+            return new OrderItems(
+                $this->items
+                    ->map(fn(OrderItem $item) => new OrderItem(
+                        itemId: $item->itemId,
+                        quantity: $item->quantity - $paidItems->get($item->itemId, 0),
+                        unitPrice: $item->unitPrice,
+                    ))
+                    ->filter(fn(OrderItem $item) => $item->quantity > 0)
+            );
+        });
     }
 
     protected function casts(): array

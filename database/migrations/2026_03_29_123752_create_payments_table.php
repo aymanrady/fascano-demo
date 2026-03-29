@@ -19,6 +19,7 @@ return new class extends Migration
             $table->string('currency');
             $table->string('status');
             $table->json('credit_card');
+            $table->json('metadata');
             $table->timestamps();
         });
     }
