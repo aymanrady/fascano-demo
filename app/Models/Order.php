@@ -113,34 +113,16 @@ class Order extends Model
 
     protected function unpaidItems(): Attribute
     {
-        return Attribute::get(function() {
-            $paidItems = $this->payments()
+        return Attribute::get(
+            fn() => $this->payments()
                 ->successful()
                 ->get()
                 ->map(fn(Payment $payment) => $payment->items)
                 ->reduce(
-                    function (Collection $paidItems, Collection $paymentItems) {
-                        $paymentItems->each(
-                            fn(int $quantity, int $itemId) => $paidItems->put(
-                                $itemId, $paidItems->get($itemId, 0) + $quantity
-                            )
-                        );
-
-                        return $paidItems;
-                    },
-                    Collection::make()
-                );
-
-            return new OrderItems(
-                $this->items
-                    ->map(fn(OrderItem $item) => new OrderItem(
-                        itemId: $item->itemId,
-                        quantity: $item->quantity - $paidItems->get($item->itemId, 0),
-                        unitPrice: $item->unitPrice,
-                    ))
-                    ->filter(fn(OrderItem $item) => $item->quantity > 0)
-            );
-        });
+                    fn(OrderItems $items, Collection $paymentItems) => $items->removePaidItems($paymentItems),
+                    $this->items
+                )
+        );
     }
 
     protected function casts(): array

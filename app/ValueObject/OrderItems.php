@@ -37,4 +37,11 @@ final class OrderItems extends Collection
             $this->forget($item->id);
         }
     }
+
+    public function removePaidItems(Collection $paidItems): self
+    {
+        return $this
+            ->map(fn(OrderItem $orderItem) => $orderItem->decrement($paidItems[$orderItem->itemId] ?? 0))
+            ->filter(fn(OrderItem $orderItem) => $orderItem->quantity > 0);
+    }
 }

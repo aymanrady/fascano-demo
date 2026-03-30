@@ -33,11 +33,11 @@ final class OrderItem implements JsonSerializable
         );
     }
 
-    public function decrement(): self
+    public function decrement(int $qty = 1): self
     {
         return new self(
             itemId: $this->itemId,
-            quantity: $this->quantity - 1,
+            quantity: max(0, $this->quantity - $qty),
             unitPrice: $this->unitPrice,
         );
     }

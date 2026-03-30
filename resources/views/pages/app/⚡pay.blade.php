@@ -20,6 +20,11 @@ new #[Layout('layouts::frontend')]
 class extends Component {
     public Order $order;
 
+    public bool $addTip = false;
+
+    #[Validate('required_if:addTip,true|numeric')]
+    public string $tip = '10';
+
     #[Validate(['required', new CreditCardNumber])]
     public string $creditCardNumber;
 
@@ -35,19 +40,20 @@ class extends Component {
     #[Url(as: 'split')]
     public bool $splitPayment = false;
 
-    public array $itemsToPay = [];
+    public Collection $itemsToPay;
 
-    public bool $addTip;
-
-    #[Validate('required_if:addTip,true')]
-    public int $tip = 0;
+    public string $splitAmountInput = '';
 
     private PaymentGateway $gateway;
 
     public function mount(): void
     {
-        $this->tip = $this->order->totals->tip->getAmount() / 100;
-        $this->addTip = $this->tip > 0;
+        $this->itemsToPay = new Collection;
+
+        if ($this->order->totals->tip->isPositive()) {
+            $this->addTip = true;
+            $this->tip = strval($this->order->totals->tip->getAmount() / 100);
+        }
     }
 
     public function boot(PaymentGateway $gateway): void
@@ -55,12 +61,26 @@ class extends Component {
         $this->gateway = $gateway;
     }
 
+    public function updatedAddTip(): void
+    {
+        if ($this->addTip === false && !$this->order->isLocked()) {
+            $this->reset('tip');
+        }
+    }
+
+    public function updatedSplitAmountInput(): void
+    {
+        if (filled($this->splitAmountInput)) {
+            $this->itemsToPay = new Collection;
+        }
+    }
+
     public function pay(): void
     {
         $this->validate();
 
-        if ($this->addTip && $this->tip > 0 && !$this->order->isLocked()) {
-            $this->order->addTip(Money::parse($this->tip * 100));
+        if ($this->addTip && filled($this->tip) && !$this->order->isLocked()) {
+            $this->order->addTip(Money::parse(floatval($this->tip)));
             $this->order->save();
         }
 
@@ -77,21 +97,27 @@ class extends Component {
                 expirationDate: $this->expirationDate,
                 cvv: $this->cvc,
             ),
-            $this->splitPayment ? new Collection($this->itemsToPay) : null
+            $this->splitPayment ? $this->itemsToPay : null
         );
 
         $this->order->refresh();
-        $this->itemsToPay = [];
+        $this->itemsToPay = new Collection;
         unset($this->amountToPay);
+        unset($this->splitAmount);
     }
 
     public function addItemToPay(Item $item): void
     {
-        $this->itemsToPay[$item->id] ??= 0;
+        if (!isset($this->order->unpaid_items[$item->id])) {
+            return;
+        }
+
         $this->itemsToPay[$item->id] = min(
-            $this->order->unpaidItems[$item->id]?->quantity ?? 0,
-            $this->itemsToPay[$item->id] + 1
+            $this->order->unpaid_items[$item->id]?->quantity ?? 0,
+            ($this->itemsToPay[$item->id] ?? 0) + 1
         );
+
+        $this->reset('splitAmountInput');
     }
 
     public function removeItemToPay(Item $item): void
@@ -105,42 +131,79 @@ class extends Component {
         if ($this->itemsToPay[$item->id] === 0) {
             unset($this->itemsToPay[$item->id]);
         }
+
+        $this->reset('splitAmountInput');
     }
 
     #[Computed]
     public function amountToPay(): Money
     {
         if ($this->splitPayment) {
-            if ($this->isLastPayment()) {
-                return $this->order->remainder;
-            }
-
-            $amountToPay = $this->subTotalSplit();
-            $amountToPay = $amountToPay->add($this->tipSplit($amountToPay));
-
-            return Money::min($amountToPay, $this->order->remainder);
+            return Money::min($this->splitAmount, $this->order->remainder);
         }
 
-        return $this->order->remainder;
+        return $this->order->remainder->add($this->tipSplit($this->order->remainder));
+    }
+
+    #[Computed]
+    public function splitAmount(): Money
+    {
+        if ($this->itemsToPay->isNotEmpty() && $this->isLastPayment()) {
+            return $this->order->remainder;
+        }
+
+        if ($this->itemsToPay->isNotEmpty()) {
+            $amount = $this->subtotalSplit();
+
+            return $amount->add($this->tipSplit($amount));
+        }
+
+        if (filled($this->splitAmountInput)) {
+            return Money::parse(floatval($this->splitAmountInput));
+        }
+
+        return Money::parse(0);
+    }
+
+    #[Computed]
+    public function orderSubtotal(): Money
+    {
+        return $this->order->totals->subtotal;
+    }
+
+    #[Computed]
+    public function orderTip(): Money
+    {
+        if ($this->order->isLocked()) {
+            return $this->order->totals->tip;
+        }
+
+        return $this->addTip ? Money::parse(floatval($this->tip)) : Money::parse(0);
+    }
+
+    #[Computed]
+    public function orderTotal(): Money
+    {
+        if ($this->order->isLocked()) {
+            return $this->order->total;
+        }
+
+        return $this->order->total->add($this->orderTip);
     }
 
     private function isLastPayment(): bool
     {
         return $this->order->unpaid_items
-            ->map(fn(OrderItem $orderItem) => new OrderItem(
-                itemId: $orderItem->itemId,
-                quantity: $orderItem->quantity - ($this->itemsToPay[$orderItem->itemId] ?? 0),
-                unitPrice: $orderItem->unitPrice,
-            ))
-            ->filter(fn(OrderItem $orderItem) => $orderItem->quantity > 0)
+            ->removePaidItems($this->itemsToPay)
             ->isEmpty();
     }
 
-    private function subTotalSplit(): Money
+    private function subtotalSplit(): Money
     {
-        return new Collection($this->itemsToPay)
-            ->map(fn(int $quantity, int $itemId) => $this->order->items[$itemId]->unitPrice->multiply($quantity))
-            ->reduce(fn(Money $amountToPay, Money $subtotal) => $amountToPay->add($subtotal), Money::parse(0));
+        $items = new Collection($this->itemsToPay)
+            ->map(fn(int $quantity, int $itemId) => $this->order->items[$itemId]->unitPrice->multiply($quantity));
+
+        return Money::sum(...$items);
     }
 
     private function tipSplit(Money $amountToPay): Money
@@ -149,7 +212,7 @@ class extends Component {
             return Money::parse(0);
         }
 
-        [$tip] = Money::parse($this->tip * 100)->allocate([
+        [$tip] = Money::parse(floatval($this->tip))->allocate([
             $amountToPay->ratioOf($this->order->total),
             $this->order->total->subtract($amountToPay)->ratioOf($this->order->total)
         ]);
@@ -182,9 +245,10 @@ class extends Component {
         <div class="space-y-6">
             <flux:switch wire:model.live="addTip" label="Add tip" :disabled="$order->isLocked()"/>
 
-            @if($addTip || $this->tip > 0)
+            @if($addTip)
                 <flux:field>
-                    <flux:input wire:model.live.debounce.500="tip" mask:dynamic="$money($input)" :readonly="$order->isLocked()"/>
+                    <flux:input wire:model.live.debounce.500="tip" mask:dynamic="$money($input)"
+                                :readonly="$order->isLocked()"/>
                     <flux:error name="tip"/>
                 </flux:field>
             @endif
@@ -192,9 +256,21 @@ class extends Component {
 
         <div class="space-y-6">
             <div class="flex">
+                <flux:heading>Subtotal</flux:heading>
+                <flux:spacer/>
+                <flux:heading>{{ $this->orderSubtotal }}</flux:heading>
+            </div>
+
+            <div class="flex">
+                <flux:heading>Tip</flux:heading>
+                <flux:spacer/>
+                <flux:heading>{{ $this->orderTip }}</flux:heading>
+            </div>
+
+            <div class="flex">
                 <flux:heading>Total</flux:heading>
                 <flux:spacer/>
-                <flux:heading>{{ $order->total }}</flux:heading>
+                <flux:heading>{{ $this->orderTotal }}</flux:heading>
             </div>
 
             @if($order->isPartiallyPaid())
@@ -210,7 +286,6 @@ class extends Component {
                 </div>
             @endif
         </div>
-
 
 
         @unless($order->isLocked())
@@ -286,6 +361,15 @@ class extends Component {
                                 </flux:button.group>
                             </div>
                         @endforeach
+
+                        <flux:separator text="or"/>
+
+                        <flux:field>
+                            <flux:input type="number" placeholder="Amount to pay"
+                                        wire:model.live.debounce.500ms="splitAmountInput"
+                                        mask:dynamic="$money($input)"/>
+                            <flux:error name="splitAmountInput"/>
+                        </flux:field>
                     </div>
                 @endif
 
