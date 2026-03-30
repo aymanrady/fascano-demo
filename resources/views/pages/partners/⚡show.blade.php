@@ -74,6 +74,8 @@ class extends Component {
                     <flux:table.cell>
                         <flux:button :href="route('restaurants.show', ['restaurant' => $restaurant->id])" variant="ghost"
                                      size="sm" icon="eye" inset="top bottom"></flux:button>
+                        <flux:button :href="route('restaurants.orders', ['restaurant' => $restaurant->id])" variant="ghost"
+                                     size="sm" icon="shopping-bag" inset="top bottom"></flux:button>
                     </flux:table.cell>
                 </flux:table.row>
             @endforeach

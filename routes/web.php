@@ -22,6 +22,10 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::livewire('restaurants/{restaurant}', 'pages::restaurants.show')
         ->can('view', 'restaurant')
         ->name('restaurants.show');
+
+    Route::livewire('restaurants/{restaurant}/orders', 'pages::restaurants.orders')
+        ->can('view', 'restaurant')
+        ->name('restaurants.orders');
 });
 
 Route::get('/app/menu/{table}', function (Table $table) {
